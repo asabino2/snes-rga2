@@ -127,44 +127,82 @@ WriteBarTile:
 
 
 ; ============================================================================
-; PrintHex16FourDigits: Prints 16-bit value in DP_TMP2/DP_TMP3 as 4 hex/BCD digits
+; PrintHex16FourDigits: Prints 16-bit value in DP_TMP2/DP_TMP3 as 4 DECIMAL digits (0000..9999)
 ; Inputs: X = BG3_MAP_BUF offset, DP_TMP2 (16-bit val), DP_TMP0 = High Attr
 ; ============================================================================
 PrintHex16FourDigits:
+    REP #$30
+    .a16
+    .i16
+    LDA DP_TMP2
+    CMP #9999
+    BCC ScoreUnderMaxDec
+    LDA #9999
+    STA DP_TMP2
+ScoreUnderMaxDec:
+    ; --- Digit 1: Thousands (1000) ---
+    LDY #$0000
+Dec1000Loop:
+    LDA DP_TMP2
+    CMP #1000
+    BCC Dec1000Done
+    SEC
+    SBC #1000
+    STA DP_TMP2
+    INY
+    BRA Dec1000Loop
+Dec1000Done:
     SEP #$20
     .a8
-    REP #$10
-    .i16
-    LDA DP_TMP3
-    LSR
-    LSR
-    LSR
-    LSR
-    JSR WriteHexNibble
-    LDA DP_TMP3
-    AND #$0F
-    JSR WriteHexNibble
+    TYA
+    JSR WriteDecDigit
+
+    ; --- Digit 2: Hundreds (100) ---
+    REP #$20
+    .a16
+    LDY #$0000
+Dec100Loop:
     LDA DP_TMP2
-    LSR
-    LSR
-    LSR
-    LSR
-    JSR WriteHexNibble
+    CMP #100
+    BCC Dec100Done
+    SEC
+    SBC #100
+    STA DP_TMP2
+    INY
+    BRA Dec100Loop
+Dec100Done:
+    SEP #$20
+    .a8
+    TYA
+    JSR WriteDecDigit
+
+    ; --- Digit 3: Tens (10) ---
+    REP #$20
+    .a16
+    LDY #$0000
+Dec10Loop:
     LDA DP_TMP2
-    AND #$0F
-    JSR WriteHexNibble
+    CMP #10
+    BCC Dec10Done
+    SEC
+    SBC #10
+    STA DP_TMP2
+    INY
+    BRA Dec10Loop
+Dec10Done:
+    SEP #$20
+    .a8
+    TYA
+    JSR WriteDecDigit
+
+    ; --- Digit 4: Ones (0..9) ---
+    LDA DP_TMP2
+    JSR WriteDecDigit
     RTS
 
-WriteHexNibble:
-    CMP #$0A
-    BCC HexIsDigit
+WriteDecDigit:
     CLC
-    ADC #$17                ; 'A' ($21) - 10 = $17
-    BRA StoreHexTile
-HexIsDigit:
-    CLC
-    ADC #$10                ; '0' ($10)
-StoreHexTile:
+    ADC #$10                ; '0' ($10) + decimal digit (0..9)
     STA !BG3_MAP_BUF,X
     LDA DP_TMP0
     STA !BG3_MAP_BUF+1,X

@@ -248,6 +248,10 @@ EnterSelectState:
     ; Load currently selected character sprites & portrait
     JSR LoadPlayerSprites
     JSR DrawSelectScreenUI
+
+    ; Play Character Select Arcade Funk BGM (Track 13)
+    LDA #$0D
+    JSR PlayBGMTrack
     RTS
 
 DrawSelectScreenUI:
@@ -391,7 +395,7 @@ CheckSelConfirm:
     STZ DP_TMP3             ; Palette 0, No flip
     JSR SetOAMSprite
 
-    ; OAM Slot 1: Animated Character Sprite (cycles Idle/Walk/Attack) at (X=136, Y=84)
+    ; OAM Slot 1: Animated Character Sprite (cycles Idle/Walk/Attack/Special) at (X=136, Y=84)
     LDX #$0004
     LDA #136
     STA DP_TMP0
@@ -403,7 +407,11 @@ CheckSelConfirm:
     LSR
     LSR
     AND #$07
-    STA DP_TMP2             ; Cycles slots 0..7!
+    CMP #$04
+    BNE StoreSelPreviewSlot
+    LDA #$09                ; Replace leg slot 4 with Special Pose (Slot 9)
+StoreSelPreviewSlot:
+    STA DP_TMP2
     STZ DP_TMP3
     JSR SetOAMSprite
 
@@ -484,10 +492,10 @@ EnterHubState:
     JSR LoadStageEnemyAndBossSprites
     JSR LoadUniversalFXSprites
 
-    ; Position Player at entrance of Station
+    ; Position Player at entrance of Station (X = 20, right next to Portal 1 at X = 28)
     REP #$20
     .a16
-    LDA #$0038
+    LDA #$0014
     STA DP_PL_X
     STZ DP_CAM_X
     SEP #$20
@@ -565,46 +573,9 @@ FoundNearPortal:
     JSR DrawGameplayHUD
 SkipHubHUDRefresh:
 
-    ; Render OAM Sprites: Player + Visible Portals
+    ; Render OAM Sprites in Hub (8 Portal Doors & Game Monitors are rendered in BG1!)
     JSR ClearOAMBuffer
     JSR RenderPlayerOAM
-
-    ; Render the 8 Portal Gates in OAM Slots 1..8 (OAM offset $04..$20)
-    LDY #$0000
-RenderHubPortalsLoop:
-    TYA
-    ASL
-    TAX
-    REP #$20
-    .a16
-    LDA !HubPortalXTable,X
-    SEC
-    SBC DP_CAM_X
-    ; Check if on screen (0..228)
-    BMI SkipRenderOnePortal
-    CMP #$00E4
-    BCS SkipRenderOnePortal
-    SEP #$20
-    .a8
-    STA DP_TMP0             ; Screen X
-    LDA #108
-    STA DP_TMP1             ; Screen Y of Portal Arch
-    LDA #28                 ; Slot 28 = Portal Gate Sprite
-    STA DP_TMP2
-    LDA #$06                ; OBJ Palette 3 (Universal FX/Portal Palette)
-    STA DP_TMP3
-    TYA
-    INC
-    ASL
-    ASL
-    TAX                     ; OAM offset = (portal_idx + 1) * 4
-    JSR SetOAMSprite
-SkipRenderOnePortal:
-    SEP #$20
-    .a8
-    INY
-    CPY #$0008
-    BCC RenderHubPortalsLoop
 
     ; Check if Player presses UP ($0800), Y ($4000), or START ($1000) while near a portal
     LDA DP_NEAR_PORTAL
@@ -814,16 +785,12 @@ StoreHubZDown:
 UpdateHubAnim:
     LDA DP_TMP0
     BEQ HubIdleAnim
-    ; Walk cycle (Slots 2, 3, 4)
+    ; Walk cycle (Slots 2, 3; Slot 4 holds 32x16 lower legs)
     LDA DP_FRAME
     LSR
     LSR
     LSR
-    AND #$03
-    CMP #$03
-    BNE SetHubWalkSlot
-    LDA #$01
-SetHubWalkSlot:
+    AND #$01
     CLC
     ADC #$02
     STA DP_PL_ANIM
@@ -1613,6 +1580,14 @@ SpawnStageBossWave:
     STA EN_ATK,X
     LDA #$01
     STA DP_BOSS_ACT
+
+    ; Switch to Stage Boss Battle BGM (Track 14) on Stages 0..8
+    LDA DP_STAGE_ID
+    CMP #$09
+    BEQ KeepFinalBossBGM
+    LDA #$0E
+    JSR PlayBGMTrack
+KeepFinalBossBGM:
     RTS
 
 
@@ -1784,6 +1759,10 @@ AnimateEnemyWalk:
     LSR
     LSR
     AND #$03
+    CMP #$03
+    BNE SetEnemyWalkSlot
+    LDA #$01                ; Cycle 0, 1, 2, 1 (Slot 3 holds 32x16 lower legs)
+SetEnemyWalkSlot:
     STA EN_ANIM,X
 
 NextEnemyAISlot:

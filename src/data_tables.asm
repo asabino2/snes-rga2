@@ -19,9 +19,9 @@ CharBaseAtkTable:
 StageBGMTable:
     .db 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
 
-; --- Hub Portal World X Coordinates (16-bit) ---
+; --- Hub Portal World X Coordinates (16-bit, aligned to the 8 OpenBOR doors in e1.gif) ---
 HubPortalXTable:
-    .dw 64, 116, 168, 220, 272, 324, 376, 428
+    .dw 28, 93, 158, 223, 288, 354, 419, 484
 
 ; --- HUD Short Character Names (9 chars max) ---
 CharNamePtrTable:

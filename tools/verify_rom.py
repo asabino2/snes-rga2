@@ -693,7 +693,7 @@ def verify_rom_file(rom_path):
     assert status == "WAI", f"Boot sequence failed to reach WAI (status={status})"
     print(f"  [PASS] Cold Boot -> FastROM -> PPU/VRAM/OAM/SPC700 Init reached WAI in {boot_steps:,} instructions!")
     print(f"  [PASS] SPC700 IPL Transferred: {emu.ipl_bytes_transferred:,} bytes (Driver Status: {emu.ipl_state})")
-    assert emu.ipl_bytes_transferred == 10828, "Expected 10,828 bytes uploaded to SPC700 ARAM!"
+    assert emu.ipl_bytes_transferred == 15428, f"Expected 15,428 bytes uploaded to SPC700 ARAM, got {emu.ipl_bytes_transferred}!"
     assert emu.wram[0x08] == 0, f"Expected initial DP_STATE == 0 (STATE_TITLE), got {emu.wram[0x08]}"
     assert emu.sram[0:4] == b"RGA2", f"Expected SRAM magic 'RGA2', got {emu.sram[0:4]}"
 

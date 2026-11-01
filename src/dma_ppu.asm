@@ -136,21 +136,29 @@ ClearOAMLowLoop:
     CPX #$0200
     BCC ClearOAMLowLoop
 
-    ; Set High OAM table ($0400-$041F) to $AA (All sprites = Large 32x32, X8 = 0)
+    ; Set High OAM table ($0400-$041F):
+    ;   Bytes 0..3   (Sprites 0..15)   = $AA (Large 32x32 sprites, X8 = 0)
+    ;   Bytes 4..31  (Sprites 16..127) = $00 (Small 16x16 sprites, X8 = 0, used for 32x42 lower legs!)
     LDX #$0000
     LDA #$AA
-ClearOAMHiLoop:
+ClearOAMHiLargeLoop:
+    STA !OAM_HI_BUF,X
+    INX
+    CPX #$0004
+    BCC ClearOAMHiLargeLoop
+    LDA #$00
+ClearOAMHiSmallLoop:
     STA !OAM_HI_BUF,X
     INX
     CPX #$0020
-    BCC ClearOAMHiLoop
+    BCC ClearOAMHiSmallLoop
     RTS
 
 
 ; ============================================================================
-; SetOAMSprite: Writes a 32x32 sprite to OAM_BUF slot
+; SetOAMSprite: Writes a 32x32 or 32x42 tall character sprite to OAM_BUF
 ; Inputs:
-;   X = OAM byte offset (0, 4, 8, 12 ... 508)
+;   X = OAM byte offset (0, 4, 8, 12 ... 60)
 ;   DP_TMP0 = Screen X (0..255)
 ;   DP_TMP1 = Screen Y (0..223)
 ;   DP_TMP2 = Sprite Slot in VRAM (0..31)
@@ -172,6 +180,8 @@ SetOAMSprite:
     TAX
     LDA !SpriteSlotTileTable,X
     STA DP_TMP4
+    LDA !SpriteLegTileTable,X
+    STA DP_TMP2
     LDA !SpriteSlotNameTable,X
     ORA DP_TMP3
     ORA #$20                ; Priority 2 (above BG1/BG2, below BG3 HUD)
@@ -180,6 +190,80 @@ SetOAMSprite:
     STA !OAM_BUF+3,X        ; Attribute byte (VHOPPPNN)
     LDA DP_TMP4
     STA !OAM_BUF+2,X        ; Tile index byte
+
+    ; Check if this sprite slot has a 32x16 lower-leg extension (32x42 tall character!)
+    LDA DP_TMP2
+    BEQ DoneSetOAMSprite
+
+    ; Shift Top 32x32 sprite up by 10 pixels so character stands 42px tall with feet on Z!
+    LDA DP_TMP1
+    SEC
+    SBC #10
+    STA !OAM_BUF+1,X
+
+    ; Compute OAM byte offset for the two 16x16 Small leg sprites: $0040 + (X * 2)
+    PHX
+    LDA !OAM_BUF+3,X
+    STA DP_TMP4
+    REP #$20
+    .a16
+    TXA
+    ASL
+    CLC
+    ADC #$0040
+    TAX
+    SEP #$20
+    .a8
+
+    ; Left 16x16 Leg Sprite at (DP_TMP0, DP_TMP1 + 22)
+    LDA DP_TMP0
+    STA !OAM_BUF,X
+    LDA DP_TMP1
+    CLC
+    ADC #22
+    STA !OAM_BUF+1,X
+    LDA DP_TMP4
+    STA !OAM_BUF+3,X
+
+    ; Right 16x16 Leg Sprite at (DP_TMP0 + 16, DP_TMP1 + 22)
+    LDA DP_TMP0
+    CMP #$F0
+    BCS HideRightLegOAM
+    CLC
+    ADC #16
+    STA !OAM_BUF+4,X
+    LDA DP_TMP1
+    CLC
+    ADC #22
+    STA !OAM_BUF+5,X
+    LDA DP_TMP4
+    STA !OAM_BUF+7,X
+    BRA SetLegTilesOAM
+
+HideRightLegOAM:
+    LDA #$F0
+    STA !OAM_BUF+5,X
+
+SetLegTilesOAM:
+    LDA DP_TMP4
+    BIT #$40
+    BNE LegTilesFlipped
+    LDA DP_TMP2
+    STA !OAM_BUF+2,X
+    CLC
+    ADC #$02
+    STA !OAM_BUF+6,X
+    PLX
+    RTS
+
+LegTilesFlipped:
+    LDA DP_TMP2
+    STA !OAM_BUF+6,X
+    CLC
+    ADC #$02
+    STA !OAM_BUF+2,X
+    PLX
+DoneSetOAMSprite:
     RTS
 
 ; Lookup tables mapping 32x32 Sprite Slot (0..31) to SNES OBJ Tile & Name Table
@@ -194,6 +278,13 @@ SpriteSlotNameTable:
     .db $00, $00, $00, $00,  $00, $00, $00, $00
     .db $01, $01, $01, $01,  $01, $01, $01, $01
     .db $01, $01, $01, $01,  $01, $01, $01, $01
+
+; 32x16 Lower-Leg Tile Table for 32x42 Tall Characters ($00 = 32x32 single sprite)
+SpriteLegTileTable:
+    .db $40, $40, $60, $60,  $00, $40, $40, $40
+    .db $00, $40, $40, $00,  $CC, $EC, $EC, $00
+    .db $CC, $CC, $CC, $00,  $4C, $6C, $6C, $00
+    .db $4C, $4C, $4C, $00,  $00, $00, $00, $00
 
 
 ; ============================================================================

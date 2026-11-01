@@ -155,10 +155,10 @@ def main():
     spc_bin = load_asset("spc700_aram.bin")
     hud_chr = load_asset("hud_2bpp.chr")
     hud_pal = load_asset("hud_2bpp.pal")
-    assert len(spc_bin) == 0x2A4C, f"Unexpected spc_bin size: {len(spc_bin)}"
-    rom_4mb[0x000000 : 0x000000 + len(spc_bin)] = spc_bin
+    assert len(spc_bin) == 0x3C44, f"Unexpected spc_bin size: {len(spc_bin)}"
     rom_4mb[0x003000 : 0x003000 + len(hud_chr)] = hud_chr
     rom_4mb[0x003800 : 0x003800 + len(hud_pal)] = hud_pal
+    rom_4mb[0x004000 : 0x004000 + len(spc_bin)] = spc_bin
     assert org_base == 0x8000 and org_base + len(code_bytes) <= 0xFFB0
     rom_4mb[0x008000 : 0x008000 + len(code_bytes)] = code_bytes
 

@@ -358,7 +358,10 @@ def crop_and_scale_sprite_32x32(gif_path, pal_16=None, is_portrait=False):
     w, h, gpal, canvas, trans_idx = decode_gif(gif_path)
 
     def is_trans(idx):
-        return idx == 0 or idx == trans_idx
+        if idx == 0 or idx == trans_idx:
+            return True
+        r, g, b = gpal[idx]
+        return (r > 240 and g < 20 and b > 240) or (r < 20 and g > 240 and b < 20)
 
     xs = []
     ys = []
@@ -382,19 +385,23 @@ def crop_and_scale_sprite_32x32(gif_path, pal_16=None, is_portrait=False):
         box_h = min(max_y - min_y + 1, 52)
         max_x = min_x + box_w - 1
         max_y = min_y + box_h - 1
+        scale = min(32.0 / box_w, 32.0 / box_h)
+        dst_w = max(1, min(32, int(round(box_w * scale))))
+        dst_h = max(1, min(32, int(round(box_h * scale))))
     else:
         box_w = max_x - min_x + 1
         box_h = max_y - min_y + 1
-
-    # Scale into 30x31 max (leaving 1px margin so outlines never clip)
-    max_dim = max(box_w, box_h, 1)
-    scale = min(30.0 / box_w, 31.0 / box_h)
-    # Don't upscale tiny objects (like pizza/projectiles) more than 1.0x
-    if max_dim < 28:
-        scale = min(scale, 1.0)
-
-    dst_w = max(1, min(32, int(round(box_w * scale))))
-    dst_h = max(1, min(32, int(round(box_h * scale))))
+        max_dim = max(box_w, box_h, 1)
+        if max_dim < 28:
+            # Tiny pickups/sparks keep 1:1 scale
+            dst_w = min(32, box_w)
+            dst_h = min(32, box_h)
+        else:
+            # Fill full 32px height and boost width so sprites are larger and fuller
+            scale_y = 32.0 / box_h
+            scale_x = scale_y * 1.25
+            dst_h = 32
+            dst_w = max(24, min(32, int(round(box_w * scale_x))))
 
     off_x = (32 - dst_w) // 2
     if is_portrait:
@@ -430,6 +437,59 @@ def crop_and_scale_sprite_32x32(gif_path, pal_16=None, is_portrait=False):
     return idx_grid
 
 
+def crop_and_scale_sprite_32x42(gif_path):
+    """
+    Scales a character/enemy/boss GIF to a larger 32x42 tall sprite!
+    Returns (top_32x32_grid, bot_32x16_grid) where:
+      - top_32x32_grid is rows 0..31 (Head, Torso, Arms, Hips, Upper Legs)
+      - bot_32x16_grid is rows 32..41 (Lower Legs & Shoes, padded to 16 rows)
+    """
+    w, h, gpal, canvas, trans_idx = decode_gif(gif_path)
+
+    def is_trans(idx):
+        if idx == 0 or idx == trans_idx:
+            return True
+        r, g, b = gpal[idx]
+        return (r > 240 and g < 20 and b > 240) or (r < 20 and g > 240 and b < 20)
+
+    xs = []
+    ys = []
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            if not is_trans(canvas[row + x]):
+                xs.append(x)
+                ys.append(y)
+
+    if not xs:
+        return [[None] * 32 for _ in range(32)], [[None] * 32 for _ in range(16)]
+
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    box_w = max_x - min_x + 1
+    box_h = max_y - min_y + 1
+
+    dst_h = 42
+    scale_y = 42.0 / box_h
+    dst_w = max(24, min(32, int(round(box_w * scale_y))))
+    off_x = (32 - dst_w) // 2
+
+    grid_42 = [[None] * 32 for _ in range(42)]
+    for dy in range(42):
+        sy = min_y + int((dy + 0.5) * box_h / 42.0)
+        sy = max(min_y, min(max_y, sy))
+        for dx in range(dst_w):
+            sx = min_x + int((dx + 0.5) * box_w / dst_w)
+            sx = max(min_x, min(max_x, sx))
+            pidx = canvas[sy * w + sx]
+            if not is_trans(pidx):
+                grid_42[dy][off_x + dx] = gpal[pidx]
+
+    top_32x32 = grid_42[:32]
+    bot_32x16 = grid_42[32:42] + [[None] * 32 for _ in range(6)]
+    return top_32x32, bot_32x16
+
+
 def pack_strip_4x_32x32(frames_4_idx_grids):
     """
     Packs 4 32x32 indexed grids into a single 2048-byte SNES OBJ VRAM strip!
@@ -457,17 +517,34 @@ def pack_strip_4x_32x32(frames_4_idx_grids):
     return bytes(strip_bytes)
 
 
-def build_spritesheet(frame_specs):
+def build_spritesheet(frame_specs, tall_config=None):
     """
     Given a list of (gif_path, is_portrait) of length multiple of 4,
     computes an optimal 16-color BGR555 palette across all frames,
     quantizes each frame into 32x32, and packs them into 2048-byte strips.
+    If tall_config is provided as (tall_indices_set, leg_slot_idx, stand_src_idx, walk_src_idx):
+      - Frames in tall_indices_set are scaled to 32x42 (top 32x32 in their slot)
+      - leg_slot_idx stores the 32x16 standing legs (top half) and 32x16 walking legs (bottom half)
     """
     raw_grids = []
+    bot_legs = {}
+    for idx, (path, is_port) in enumerate(frame_specs):
+        if tall_config is not None and idx in tall_config[0] and not is_port:
+            top_g, bot_g = crop_and_scale_sprite_32x42(path)
+            raw_grids.append([path, is_port, top_g])
+            bot_legs[idx] = bot_g
+        else:
+            grid = crop_and_scale_sprite_32x32(path, pal_16=None, is_portrait=is_port)
+            raw_grids.append([path, is_port, grid])
+
+    if tall_config is not None:
+        _, leg_slot_idx, stand_src_idx, walk_src_idx = tall_config
+        stand_16 = bot_legs.get(stand_src_idx, [[None] * 32 for _ in range(16)])
+        walk_16 = bot_legs.get(walk_src_idx, [[None] * 32 for _ in range(16)])
+        raw_grids[leg_slot_idx][2] = stand_16 + walk_16
+
     hist = {}
-    for path, is_port in frame_specs:
-        grid = crop_and_scale_sprite_32x32(path, pal_16=None, is_portrait=is_port)
-        raw_grids.append((path, is_port, grid))
+    for path, is_port, grid in raw_grids:
         weight = 2 if is_port else 1
         for y in range(32):
             for x in range(32):
@@ -496,7 +573,33 @@ def build_spritesheet(frame_specs):
     return bytes(strips), encode_palette_bgr555(pal_16)
 
 
-def convert_background_layer(gif_path, dst_w_tiles, dst_h_tiles, max_unique_tiles, pal_idx_base, num_palettes=2, crop_mode="scroll"):
+def composite_openbor_entity_on_rgb_canvas(base_rgb, bw, bh, entity_gif_path, spawn_x, spawn_y, off_x, off_y, flip_x=False):
+    """
+    Composites an OpenBOR entity GIF (like P0.gif, p1.gif..p8.gif, te1.gif, youtube0.gif)
+    onto an (r, g, b) / None 2D canvas at OpenBOR coordinates (spawn_x, spawn_y) with offset (off_x, off_y).
+    """
+    ew, eh, epal, ecanvas, etrans = decode_gif(entity_gif_path)
+    tl_x = spawn_x - ((ew - 1 - off_x) if flip_x else off_x)
+    tl_y = spawn_y - off_y
+    for ey in range(eh):
+        dy = tl_y + ey
+        if dy < 0 or dy >= bh:
+            continue
+        erow = ey * ew
+        for ex in range(ew):
+            sx = (ew - 1 - ex) if flip_x else ex
+            pidx = ecanvas[erow + sx]
+            if pidx == 0 or pidx == etrans:
+                continue
+            r, g, b = epal[pidx]
+            if (r > 240 and g < 20 and b > 240) or (r < 20 and g > 240 and b < 20):
+                continue
+            dx = tl_x + ex
+            if 0 <= dx < bw:
+                base_rgb[dy][dx] = (r, g, b)
+
+
+def convert_background_layer(gif_path, dst_w_tiles, dst_h_tiles, max_unique_tiles, pal_idx_base, num_palettes=2, crop_mode="scroll", is_fg_with_bg2=False):
     """
     Converts an OpenBOR background/panel GIF into SNES 4bpp tiles + tilemap + BGR555 palettes.
     dst_w_tiles: 32 (256px) or 64 (512px)
@@ -504,33 +607,83 @@ def convert_background_layer(gif_path, dst_w_tiles, dst_h_tiles, max_unique_tile
     Supports multi-palette (num_palettes x 16 colors) and automatic tile deduplication
     so large scrolling panels fit cleanly within max_unique_tiles!
     """
-    w, h, gpal, canvas, _ = decode_gif(gif_path)
+    w, h, gpal, canvas, trans_idx = decode_gif(gif_path)
     dst_w = dst_w_tiles * 8
     dst_h = dst_h_tiles * 8
 
+    # Build source 2D RGB canvas (with None for transparent chroma-key pixels in foreground layers)
+    r0, g0, b0 = gpal[0]
+    pal0_is_chroma = (r0 > 240 and g0 < 20 and b0 > 240) or (r0 < 20 and g0 > 240 and b0 < 20)
+    src_rgb = [[None] * w for _ in range(h)]
+    for y in range(h):
+        row_off = y * w
+        for x in range(w):
+            pidx = canvas[row_off + x]
+            r, g, b = gpal[pidx]
+            is_magic_pink_or_green = (r > 240 and g < 20 and b > 240) or (r < 20 and g > 240 and b < 20)
+            if (is_fg_with_bg2 or pal0_is_chroma) and ((pidx == 0 and pal0_is_chroma) or is_magic_pink_or_green):
+                src_rgb[y][x] = None
+            else:
+                src_rgb[y][x] = (r, g, b)
+
+    norm_path = gif_path.replace("\\", "/").lower()
+
+    # Composite OpenBOR stage entities onto their panels:
+    if norm_path.endswith("bgs/tube/e1.gif"):
+        # LEVELS/Estacao.txt: 8 Portal Doors (P0.gif + p1.gif..p8.gif) + port_retorno + cabo
+        portal_spawns = [
+            (172, 180, "Bgs/tube/p1.gif"),
+            (333, 180, "Bgs/tube/p2.gif"),
+            (494, 180, "Bgs/tube/p3.gif"),
+            (655, 180, "Bgs/tube/p4.gif"),
+            (816, 180, "Bgs/tube/p5.gif"),
+            (977, 180, "Bgs/tube/p6.gif"),
+            (1138, 180, "Bgs/tube/p8.gif"),
+            (1299, 180, "Bgs/tube/p7.gif"),
+        ]
+        for px_c, py_c, p_gif in portal_spawns:
+            # First draw closed sci-fi door P0.gif in the doorway, then p1..p8 monitor screen + frame
+            composite_openbor_entity_on_rgb_canvas(src_rgb, w, h, "Bgs/tube/P0.gif", px_c, py_c, 36, 179, flip_x=True)
+            composite_openbor_entity_on_rgb_canvas(src_rgb, w, h, p_gif, px_c, py_c, 36, 179, flip_x=True)
+        composite_openbor_entity_on_rgb_canvas(src_rgb, w, h, "CHARS/misc/po11.gif", 60, 190, 41, 128, flip_x=True)
+        composite_openbor_entity_on_rgb_canvas(src_rgb, w, h, "CHARS/misc/cabo2.gif", 591, 180, 25, 117, flip_x=True)
+    elif norm_path.endswith("bgs/select.gif"):
+        # LEVELS/fliperama.txt: spawn fliper (CHARS/misc/te1.gif) at coords 308 145, offset 1 38, flip 1
+        composite_openbor_entity_on_rgb_canvas(src_rgb, w, h, "CHARS/misc/te1.gif", 308, 145, 1, 38, flip_x=True)
+    elif norm_path.endswith("bgs/tube/hal2.gif"):
+        # LEVELS/Tube0.txt: spawn Youtube (Bgs/tube/youtube0.gif) at coords 0 1, offset 0 -1
+        composite_openbor_entity_on_rgb_canvas(src_rgb, w, h, "Bgs/tube/youtube0.gif", 0, 1, 0, -1, flip_x=False)
+
     # Sample image onto dst_w x dst_h RGB grid
-    # For wide stage panels (e.g. 1992x276), take an exciting 768px..1024px representative span
-    # scaled smoothly to 512x224 so architectural details, signs, and floors are sharp and recognizable
-    if crop_mode == "scroll" and w > dst_w * 2:
+    if norm_path.endswith("bgs/tube/e1.gif"):
+        # Span all 8 portal doors (x=104..1368) across the 512px wide SNES Hub stage!
+        start_x = 104
+        sample_w = 1264
+    elif norm_path.endswith("bgs/tube/hal2.gif"):
+        start_x = 0
+        sample_w = min(w, int(dst_w * 1.5))
+    elif crop_mode == "scroll" and w > dst_w * 2:
         sample_w = min(w, int(dst_w * 1.65))
         start_x = min(max(0, (w - sample_w) // 4), w - sample_w)
     else:
         sample_w = w
         start_x = 0
 
-    rgb_img = [[(0, 0, 0)] * dst_w for _ in range(dst_h)]
+    rgb_img = [[None] * dst_w for _ in range(dst_h)]
     # Sub-divide into num_palettes vertical/regional bands or global quantization
     hist_per_pal = [{} for _ in range(num_palettes)]
 
     for y in range(dst_h):
         sy = min(h - 1, int(y * h / dst_h))
-        row_off = sy * w
         for x in range(dst_w):
             sx = start_x + min(sample_w - 1, int(x * sample_w / dst_w))
-            c = gpal[canvas[row_off + sx]]
+            c = src_rgb[sy][sx]
+            if c is None and not is_fg_with_bg2:
+                c = (8, 8, 16)
             rgb_img[y][x] = c
-            p_slot = 0 if num_palettes == 1 else min(num_palettes - 1, (y * num_palettes) // dst_h)
-            hist_per_pal[p_slot][c] = hist_per_pal[p_slot].get(c, 0) + 1
+            if c is not None:
+                p_slot = 0 if num_palettes == 1 else min(num_palettes - 1, (y * num_palettes) // dst_h)
+                hist_per_pal[p_slot][c] = hist_per_pal[p_slot].get(c, 0) + 1
 
     palettes = []
     for p_slot in range(num_palettes):
@@ -552,7 +705,11 @@ def convert_background_layer(gif_path, dst_w_tiles, dst_h_tiles, max_unique_tile
                 px_list = [0] * 64
                 for py in range(8):
                     for px in range(8):
-                        r, g, b = rgb_img[ty * 8 + py][tx * 8 + px]
+                        rgb = rgb_img[ty * 8 + py][tx * 8 + px]
+                        if rgb is None:
+                            px_list[py * 8 + px] = 0
+                            continue
+                        r, g, b = rgb
                         # Find nearest color in pal (including index 1..15)
                         bi = 1
                         bd = 1 << 30
@@ -593,6 +750,17 @@ def convert_background_layer(gif_path, dst_w_tiles, dst_h_tiles, max_unique_tile
 
         kept_tiles = [empty_tile]
         kept_map = {empty_tile: 0}
+
+        # 0. For the Fliperama Hub (e1.gif), prioritize keeping 100% of unique tiles in the
+        #    8 game monitor screens and upper door frames (ty = 0..6) so every game screenshot is crystal-clear!
+        rel_norm_check = gif_path.replace("\\", "/").lower()
+        if rel_norm_check == "bgs/tube/e1.gif":
+            for ty_prio in range(0, 7):
+                for tx_prio in range(dst_w_tiles):
+                    _, _, px_tup = tile_assignments[ty_prio * dst_w_tiles + tx_prio]
+                    if px_tup not in kept_map and len(kept_tiles) < max_unique_tiles:
+                        kept_map[px_tup] = len(kept_tiles)
+                        kept_tiles.append(px_tup)
 
         # 1. First keep the top 64 most frequently repeated background tiles
         by_freq = sorted(freq.keys(), key=lambda t: freq[t], reverse=True)
@@ -1089,8 +1257,10 @@ def main():
     all_player_chr = bytearray()
     all_player_pal = bytearray()
     select_portraits_frames = []
+    # Player 32x42 tall config: frames {0,1,2,3,5,6,7,9,10} are 32x42; slot 4 stores stand(0) + walk(2) lower legs
+    player_tall_cfg = ({0, 1, 2, 3, 5, 6, 7, 9, 10}, 4, 0, 2)
     for name, specs in players:
-        chr_data, pal_data = build_spritesheet(specs)
+        chr_data, pal_data = build_spritesheet(specs, tall_config=player_tall_cfg)
         assert len(chr_data) == 6144
         assert len(pal_data) == 32
         all_player_chr.extend(chr_data)
@@ -1184,8 +1354,10 @@ def main():
 
     all_enemy_chr = bytearray()
     all_enemy_pal = bytearray()
+    # Enemy/Boss 32x42 tall config: frames {0,1,2,4,5,6} are 32x42; slot 3 stores stand(0) + walk(1) lower legs
+    enemy_tall_cfg = ({0, 1, 2, 4, 5, 6}, 3, 0, 1)
     for name, specs in enemies:
-        chr_data, pal_data = build_spritesheet(specs)
+        chr_data, pal_data = build_spritesheet(specs, tall_config=enemy_tall_cfg)
         assert len(chr_data) == 4096
         all_enemy_chr.extend(chr_data)
         all_enemy_pal.extend(pal_data)
@@ -1262,8 +1434,9 @@ def main():
 
     all_boss_chr = bytearray()
     all_boss_pal = bytearray()
+    boss_tall_cfg = ({0, 1, 2, 4, 5, 6}, 3, 0, 1)
     for name, specs in bosses:
-        chr_data, pal_data = build_spritesheet(specs)
+        chr_data, pal_data = build_spritesheet(specs, tall_config=boss_tall_cfg)
         assert len(chr_data) == 4096
         all_boss_chr.extend(chr_data)
         all_boss_pal.extend(pal_data)
@@ -1284,7 +1457,7 @@ def main():
         ("screen_gameover","Bgs/gameover.gif",            None,                        False),
         ("screen_ending",  "Bgs/complete.gif",            None,                        False),
         ("stage_00_bgs",   "Bgs/bgs/bgs.gif",             "Bgs/rua1/back0.gif",        True),
-        ("stage_01_hub",   "Bgs/tube/e1.gif",             "Bgs/tube/tilt0.gif",        True),
+        ("stage_01_hub",   "Bgs/tube/e1.gif",             None,                        True),
         ("stage_02_mega",  "Bgs/megaman1/mega1.gif",      "Bgs/megaman1/mega1back.gif",True),
         ("stage_03_tmnt",  "Bgs/turtle1/rua1.gif",        "Bgs/turtle1/back1.gif",     True),
         ("stage_04_gold",  "Bgs/GoldenAxe1/golden1.gif",  "Bgs/GoldenAxe1/back1.gif",  True),
@@ -1318,14 +1491,16 @@ def build_stage_package_shifted(bg1_gif, bg2_gif=None, is_scrolling=True):
     """
     w_tiles = 64 if is_scrolling else 32
     max_bg1_tiles = 380 if bg2_gif is not None else 508
+    n_bg1_pals = 2 if bg2_gif is not None else 4
     chr1, map1, pal1, n1 = convert_background_layer(
         bg1_gif,
         dst_w_tiles=w_tiles,
         dst_h_tiles=28,
         max_unique_tiles=max_bg1_tiles,
         pal_idx_base=2,
-        num_palettes=2,
+        num_palettes=n_bg1_pals,
         crop_mode="scroll" if is_scrolling else "full",
+        is_fg_with_bg2=(bg2_gif is not None),
     )
     if not is_scrolling:
         map1 = map1 + map1
@@ -1354,17 +1529,16 @@ def build_stage_package_shifted(bg1_gif, bg2_gif=None, is_scrolling=True):
         while len(chr2_padded) < 128 * 32:
             chr2_padded.extend(b"\x00" * 32)
         chr_16kb = chr1_padded[: 384 * 32] + chr2_padded[: 128 * 32]
+        pal_all = bytearray(pal1[:64])  # Palettes 2 & 3
+        pal_all.extend(pal2[:32])       # Palette 4
+        pal5 = [(0, 0, 0)] * 16
+        pal_all.extend(encode_palette_bgr555(pal5))  # Palette 5
     else:
         while len(chr1_padded) < 512 * 32:
             chr1_padded.extend(b"\x00" * 32)
         chr_16kb = chr1_padded[: 512 * 32]
         map2 = b"\x00" * 2048
-        pal2 = b"\x00" * 32
-
-    pal_all = bytearray(pal1[:64])  # Palettes 2 & 3
-    pal_all.extend(pal2[:32])       # Palette 4
-    pal5 = [(0, 0, 0)] * 16
-    pal_all.extend(encode_palette_bgr555(pal5))  # Palette 5
+        pal_all = bytearray(pal1[:128]) # Palettes 2, 3, 4 & 5
 
     pkg = bytearray()
     pkg.extend(chr_16kb[: 512 * 32])     # $0000..$3FFF

@@ -310,10 +310,10 @@ WaitIPLStartAck:
     RTS
 
 IPLTransferData:
-    ; Transfer $2A4C (10,828) bytes from $C0:0000 to ARAM $0200
+    ; Transfer $3C44 (15,428) bytes from $C0:4000 to ARAM $0200
     LDX #$0000              ; Byte index & counter (low byte sent to APUIO0)
 IPLByteLoop:
-    LDA @$C00000,X          ; Read byte from SPC700 image in Bank $C0
+    LDA @$C04000,X          ; Read byte from SPC700 image in Bank $C0 ($C0:4000)
     STA !APUIO1             ; Data byte -> APUIO1
     TXA                     ; Counter -> A
     STA !APUIO0             ; Counter -> APUIO0
@@ -328,7 +328,7 @@ WaitIPLByteAck:
 
 IPLByteAcked:
     INX
-    CPX #$2A4C              ; Total size of spc700_aram.bin (10,828 bytes)
+    CPX #$3C44              ; Total size of spc700_aram.bin (15,428 bytes)
     BCC IPLByteLoop
 
     ; Execute uploaded SPC700 program at $0200:
